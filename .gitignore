@@ -1,0 +1,10 @@
+logs/*
+outputs/*
+res/*
+shell_scripts/*
+./*.sh
+*.log
+imgs/*
+*.pkl
+*.out
+pkl/*
