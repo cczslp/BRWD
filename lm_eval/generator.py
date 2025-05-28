@@ -446,39 +446,3 @@ class Generator:
         results["dip_detection_results"] = dip_detection_results
         
         return results
-
-    def eval_robust_llr_detect(self, task_name):
-        # prepare data
-        task = tasks.get_task(task_name)
-        orig_ids = None
-        if self.args.detect_human_code:
-            task_dataset = task.get_dataset()
-            
-            generations = []
-            for i in range(len(task_dataset)):
-                full_human = task.get_full_data(task_dataset[i])
-                if full_human:
-                    generations.append([full_human])
-        elif self.args.attacked_gen_path is not None:
-            task_dataset = task.get_dataset()
-            generations, orig_ids = self.get_attacked_gens(self.args.attacked_gen_path)
-        else:
-            generations, _ = self.generate_text(task_name)
-
-        # prepare detector
-        ub_detector = UnbiasedDetector(inject_type=self.args.gen_method,
-                                    vocab=list(self.tokenizer.get_vocab().values()),
-                                    gamma=self.args.gamma,
-                                    delta=self.args.delta,
-                                    tokenizer=self.tokenizer,
-                                    model=self.model,
-                                    acc=self.accelerator,
-                                    entropy_threshold=self.args.ent_thresh)
-        
-        # detect
-        results = dict()
-        print('Using unbiased watermark detector...')
-        ub_detection_results = self.detect_watermark(task_name, generations, ub_detector, orig_ids)
-        results["ub_detection_results"] = ub_detection_results
-        
-        return results

@@ -140,11 +140,6 @@ def parse_args():
         help='whether to use only bayesian detector'
     )
     parser.add_argument(
-        "--ub_only",
-        action='store_true',
-        help='whether to use only robust LLR detector adopted by unbiased watermark'
-    )
-    parser.add_argument(
         "--wo_model",
         action='store_true',
         help='whether to load model for detection'
@@ -252,8 +247,6 @@ def main():
             new_results = generator.eval_bayesian_detect(task_name)
         elif args.dip_only:
             new_results = generator.eval_dip_detect(task_name)
-        elif args.ub_only:
-            new_results = generator.eval_robust_llr_detect(task_name)
         else:
             new_results = generator.evaluate(task_name)
         

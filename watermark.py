@@ -24,7 +24,6 @@ import math
 import torch
 from torch import Tensor
 from transformers import LogitsProcessor
-from unbiased.robust_llr_batch import RobustLLR_Score_Batch_v2
 
 # from nltk.util import ngrams
 # from normalizers import normalization_strategy_lookup
@@ -505,105 +504,5 @@ class DipMarkDetector(WatermarkBase):
                 'num_green_tokens':num_tokens_green,
                 'num_tokens_detect':num_tokens_detect
             }
-        self.clear_probs_cache()
-        return score_dict
-
-
-class UnbiasedDetector(WatermarkBase):
-    def __init__(self, inject_type, tokenizer, model=None, acc=None, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.inject_type = inject_type
-        self.rng = torch.Generator()
-        self.tokenizer = tokenizer
-        if model:
-            self.model = model.to(acc.device)
-        self.acc = acc
-        self.min_prefix_len = 1        
-        grid_size = 10
-        dist_qs = [i / grid_size for i in range(0, grid_size + 1)]
-        scorer = RobustLLR_Score_Batch_v2.from_grid([0.0], dist_qs)
-        self.scorer = scorer
-     
-    def cal_robust_llr_score(self, old_logits:torch.Tensor, new_logits:torch.Tensor, target_ids:torch.Tensor):
-        old_logits = old_logits.unsqueeze(0)
-        new_logits = new_logits.unsqueeze(0)
-        target_ids = target_ids.unsqueeze(0)
-
-        seq_len = target_ids.size(1)
-        scores = torch.zeros(
-            old_logits.shape[:-1] + (self.scorer.query_size(),), device=old_logits.device
-        )
-        for i in range(seq_len):
-            llr, max_llr, min_llr = self.scorer.score(old_logits[:, i, :], new_logits[:, i, :])
-            query_ids = target_ids[:, i]
-            unclipped_scores = torch.gather(llr, -1, query_ids.unsqueeze(-1)).squeeze(
-                -1
-            )
-            scores[:, i] = torch.clamp(unclipped_scores.unsqueeze(-1), min_llr, max_llr)
-
-        sum_score = scores.sum(-2)
-        # best_index = torch.argmax(sum_score, dim=-1)
-        # best_dist_q = [dist_qs[i] for i in best_index.cpu().tolist()]
-        # best_sum_score = (
-        #     torch.gather(
-        #         sum_score,
-        #         -1,
-        #         best_index.unsqueeze(-1),
-        #     )
-        #     .squeeze(-1)
-        #     .cpu()
-        #     .tolist()
-        # )
-        return torch.max(sum_score).item()
-
-    @torch.no_grad()
-    def detect(
-        self,
-        tokenized_text: torch.Tensor = None,
-        tokenized_prefix: torch.Tensor = None,
-        **kwargs,
-    ) -> dict:
-        tokenized_text = tokenized_text.to(self.acc.device)
-        tokenized_prefix = tokenized_prefix.to(self.acc.device)
-
-        prefix_len = max(self.min_prefix_len, len(tokenized_prefix))
-        gen_len = len(tokenized_text)
-        num_tokens_detect = gen_len - prefix_len
-        num_tokens_scored = num_tokens_detect
-
-        model_logits = self.model(torch.unsqueeze(tokenized_text, 0), return_dict=True).logits
-        self.cached_probs = torch.softmax(model_logits, dim=-1)
-        old_logits:torch.Tensor = model_logits[0, prefix_len-1:-1, :]
-        new_logits = old_logits.clone()
-        target_ids = tokenized_text[prefix_len:]
-
-        green_masks = torch.zeros_like(old_logits)
-        for i in range(prefix_len, gen_len):
-            green_ids = self._get_greenlist_ids(tokenized_text[:i]).to(self.acc.device)
-            green_masks[i-prefix_len, green_ids] = 1
-
-        if self.inject_type == 'sweet':
-            # info_entropy = self.calculate_info_entropy_tensor(self.model, tokenized_text)
-            # print(info_entropy.size())
-            info_entropy = self.calculate_info_entropy_tensor(self.model, tokenized_text)[prefix_len-1:-1]
-            high_ent_ids = torch.where(info_entropy > self.entropy_threshold)[0]
-            green_masks = green_masks[high_ent_ids, :]
-            old_logits = old_logits[high_ent_ids, :]
-            new_logits = new_logits[high_ent_ids, :]
-            target_ids = target_ids[high_ent_ids]
-            num_tokens_scored = len(high_ent_ids)
-
-        if num_tokens_scored == 0:
-            return {'invalid':True}
-        
-        new_logits += green_masks * self.delta
-        score = self.cal_robust_llr_score(old_logits, new_logits, target_ids)
-
-        score_dict = {
-            'num_tokens_detect':num_tokens_detect,
-            'num_tokens_scored':num_tokens_scored,
-            'score':score
-        }
-
         self.clear_probs_cache()
         return score_dict
